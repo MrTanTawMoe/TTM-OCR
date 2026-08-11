@@ -11,16 +11,10 @@ _ocr = ddddocr.DdddOcr(show_ad=False)
 
 def ocr_processing(image_bytes):
     try:
-        nparr = np.frombuffer(image_bytes, np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        if img is None:
-            return ""
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        blur = cv2.GaussianBlur(gray, (3, 3), 0)
-        _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        _, buffer = cv2.imencode('.png', thresh)
-        result = _ocr.classification(buffer.tobytes())
-        return result.strip()
+        # ddddocr က raw bytes ကို တိုက်ရိုက်ဖတ်တာ ပိုကောင်းပါတယ်
+        # OpenCV နဲ့ thresholding လုပ်တာကို ဖြုတ်လိုက်ပါမယ်
+        result = _ocr.classification(image_bytes)
+        return result.upper().strip() # စာလုံးကြီးနဲ့ပဲ ပြန်ပေးမယ်
     except Exception as e:
         print(f"OCR Error: {e}")
         return ""
