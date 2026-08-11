@@ -1,55 +1,64 @@
-const express = require('express');
-const multer = require('multer');
-const { createWorker } = require('tesseract.js');
-const cors = require('cors');
-const fs = require('fs');
+import asyncio
+import aiohttp
+from aiohttp import web
+import cv2
+import ddddocr
+import numpy as np
+import os
 
-const app = express();
-app.use(express.json());
-app.use(cors());
+# ddddocr ကို initialize လုပ်ခြင်း[cite: 1]
+_ocr = ddddocr.DdddOcr(show_ad=False)
 
-// Temporary storage for uploaded images
-const upload = multer({ dest: 'uploads/' });
+def _ocr_sync(image_bytes):
+    nparr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if img is None:
+        return ""
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    blur = cv2.GaussianBlur(gray, (3, 3), 0)
+    _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    _, buffer = cv2.imencode('.png', thresh)
+    result = _ocr.classification(buffer.tobytes())
+    return result
 
-// Health Check Endpoint (Cron-job အတွက်)
-app.get('/', (req, res) => {
-    res.status(200).json({ status: 'OCR Server is active and running!' });
-});
+async def extract_text_from_image(image_bytes):
+    return await asyncio.to_thread(_ocr_sync, image_bytes)
 
-app.get('/health', (req, res) => {
-    res.status(200).json({ status: 'OK' });
-});
+# ------------------- API HANDLER -------------------
+async def handle_ocr_upload(request):
+    try:
+        reader = await request.multipart()
+        image_bytes = None
 
-// OCR Processing Endpoint
-app.post('/api/ocr/process', upload.single('image'), async (req, res) => {
-    const file = req.file;
-    if (!file) {
-        return res.status(400).json({ error: 'No image provided' });
-    }
+        async for field in reader:
+            if field.name == 'image':
+                image_bytes = await field.read()
+                break
 
-    try {
-        // Initialize Tesseract worker
-        const worker = await createWorker('eng');
-        const ret = await worker.recognize(file.path);
-        await worker.terminate();
+        if not image_bytes:
+            return web.json_response({"success": False, "error": "No image provided"}, status=400)
 
-        // Clean up uploaded temp file from server storage
-        if (fs.existsSync(file.path)) {
-            fs.unlinkSync(file.path);
-        }
+        # ပုံထဲက စာသားကို ddddocr ဖြင့် ဖတ်မည်[cite: 1]
+        extracted_text = await extract_text_from_image(image_bytes)
 
-        res.status(200).json({ 
-            success: true, 
-            extractedText: ret.data.text 
-        });
-    } catch (error) {
-        // Clean up file if error occurs
-        if (file && fs.existsSync(file.path)) {
-            fs.unlinkSync(file.path);
-        }
-        res.status(500).json({ error: error.message });
-    }
-});
+        # APK ဆီသို့ ဖတ်လို့ရလာတဲ့ စာသား string ကို တိုက်ရိုက်ပြန်ပေးမည်
+        return web.json_response({
+            "success": True,
+            "text": extracted_text
+        })
+    except Exception as e:
+        return web.json_response({"success": False, "error": str(e)}, status=500)
 
-const PORT = process.env.PORT || 5001;
-app.listen(PORT, () => console.log(`OCR Server running on port ${PORT}`));
+async def handle_root(request):
+    return web.Response(text="OCR Image API Server is running!")
+
+async def init_app():
+    app = web.Application()
+    app.router.add_get('/', handle_root)
+    app.router.add_post('/api/ocr/extract', handle_ocr_upload)
+    return app
+
+if __name__ == '__main__':
+    app = asyncio.run(init_app())
+    port = int(os.environ.get('BOT_PORT', 8099))
+    web.run_app(app, host='0.0.0.0', port=port)
